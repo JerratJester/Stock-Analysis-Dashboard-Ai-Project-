@@ -1,66 +1,99 @@
-from typing import List
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-import csv
 import os
+import csv
 from datetime import datetime
+from typing import List, Dict, Tuple
+
 import pandas as pd
 import matplotlib.pyplot as plt
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from utils.news_api import fetch_news
 
 analyzer = SentimentIntensityAnalyzer()
 
-def classify_sentiment(score: float) -> str:
-    if score >= 0.05:
-        return "positive"
-    elif score <= -0.05:
-        return "negative"
-    else:
-        return "neutral"
+def prepare_sentiment_data_from_news(ticker: str, limit: int = 5) -> List[Dict]:
+    """
+    Fetches news articles for the given ticker using utils.news_api.fetch_news,
+    analyzes headline sentiment, and returns a list of dicts with keys:
+    'title', 'url', 'publishedAt', 'sentiment'.
+    """
+    raw = fetch_news(ticker, limit=limit)
+    if not isinstance(raw, list):
+        raise TypeError(f"fetch_news returned {type(raw)}, expected List[Dict].")
 
-def analyze_text(text: str) -> float:
-    return analyzer.polarity_scores(text)['compound']
+    results: List[Dict] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        title = entry.get("title") or entry.get("description") or ""
+        score = analyzer.polarity_scores(title).get("compound", 0.0)
+        results.append({
+            "title": title,
+            "url": entry.get("url", ""),
+            "publishedAt": entry.get("publishedAt", ""),
+            "sentiment": score
+        })
+    return results
 
-def summarize_sentiment(sentiment_data: List[dict]) -> dict:
-    if not sentiment_data:
-        return {
-            "average": 0.0,
-            "positive": 0,
-            "neutral": 0,
-            "negative": 0,
-            "total": 0
-        }
 
-    total = len(sentiment_data)
-    avg = sum(item['sentiment'] for item in sentiment_data) / total
-    classified = [classify_sentiment(item['sentiment']) for item in sentiment_data]
+def summarize_sentiment(ticker: str, limit: int = 5) -> Tuple[float, Dict[str, float]]:
+    """
+    Fetches sentiment data for a ticker and returns a tuple:
+    (average_sentiment_score, summary_dict).
 
+    summary_dict has keys: average, positive, neutral, negative, total.
+    """
+    data = prepare_sentiment_data_from_news(ticker, limit=limit)
+    if not data:
+        summary = {"average": 0.0, "positive": 0, "neutral": 0, "negative": 0, "total": 0}
+        return 0.0, summary
+
+    total = len(data)
+    avg = sum(item["sentiment"] for item in data) / total
+    pos = sum(1 for item in data if item["sentiment"] >= 0.05)
+    neg = sum(1 for item in data if item["sentiment"] <= -0.05)
+    neu = total - pos - neg
+
+    summary = {
+        "average": round(avg, 4),
+        "positive": pos,
+        "neutral": neu,
+        "negative": neg,
+        "total": total
+    }
+    return summary["average"], summary
+
+
+def summarize_combined_sentiment(news_data: List[Dict], tweet_data: List[Dict]) -> Dict[str, float]:
+    """
+    Combines two sentiment lists (news and tweets) and summarizes overall sentiment.
+    """
+    combined = news_data + tweet_data
+    if not isinstance(combined, list):
+        raise TypeError("Expected lists of dicts for sentiment data.")
+    # Reuse summary logic on combined list
+    total = len(combined)
+    if total == 0:
+        return {"average": 0.0, "positive": 0, "neutral": 0, "negative": 0, "total": 0}
+    avg = sum(item.get("sentiment", 0.0) for item in combined) / total
+    pos = sum(1 for item in combined if item.get("sentiment", 0.0) >= 0.05)
+    neg = sum(1 for item in combined if item.get("sentiment", 0.0) <= -0.05)
+    neu = total - pos - neg
     return {
         "average": round(avg, 4),
-        "positive": classified.count("positive"),
-        "neutral": classified.count("neutral"),
-        "negative": classified.count("negative"),
+        "positive": pos,
+        "neutral": neu,
+        "negative": neg,
         "total": total
     }
 
-def prepare_sentiment_data_from_news(articles: List[dict]) -> List[dict]:
-    return [
-        {"text": article["title"], "sentiment": analyze_text(article["title"])}
-        for article in articles if "title" in article
-    ]
 
-def prepare_sentiment_data_from_tweets(tweets: List[dict]) -> List[dict]:
-    return [
-        {"text": tweet["text"], "sentiment": analyze_text(tweet["text"])}
-        for tweet in tweets if "text" in tweet
-    ]
-
-def summarize_combined_sentiment(news_data: List[dict], tweet_data: List[dict]) -> dict:
-    combined = news_data + tweet_data
-    return summarize_sentiment(combined)
-
-def save_sentiment_summary(ticker: str, summary: dict, filepath: str = "sentiment_log.csv") -> None:
+def save_sentiment_summary(ticker: str, summary: Dict[str, float], filepath: str = "sentiment_log.csv") -> None:
+    """
+    Appends a summary row to a CSV log with timestamp and counts.
+    """
     file_exists = os.path.isfile(filepath)
-    with open(filepath, mode="a", newline="") as file:
-        writer = csv.writer(file)
+    with open(filepath, mode="a", newline="") as f:
+        writer = csv.writer(f)
         if not file_exists:
             writer.writerow(["timestamp", "ticker", "average", "positive", "neutral", "negative", "total"])
         writer.writerow([
@@ -73,34 +106,33 @@ def save_sentiment_summary(ticker: str, summary: dict, filepath: str = "sentimen
             summary.get("total", 0)
         ])
 
+
 def plot_sentiment_trend(filepath: str = "sentiment_log.csv", ticker: str = None):
+    """
+    Reads the sentiment log CSV and plots average sentiment and volume over time.
+    If ticker is provided, filters log for that ticker.
+    """
     if not os.path.isfile(filepath):
-        print(f"[INFO] No sentiment file found at {filepath}.")
-        return
+        print(f"[INFO] No sentiment log found at {filepath}.")
+        return None
 
     df = pd.read_csv(filepath, parse_dates=["timestamp"])
     if ticker:
-        df = df[df["ticker"] == ticker.upper()]
+        df = df[df["ticker"].str.upper() == ticker.upper()]
 
     if df.empty:
         print(f"[INFO] No sentiment data available for {ticker}.")
-        return
+        return None
 
     df = df.sort_values("timestamp")
     fig, ax1 = plt.subplots(figsize=(10, 5))
-
-    ax1.plot(df["timestamp"], df["average"], color="tab:blue", marker="o", label="Avg Sentiment")
+    ax1.plot(df["timestamp"], df["average"], marker="o", label="Avg Sentiment")
     ax1.set_xlabel("Timestamp")
-    ax1.set_ylabel("Average Sentiment", color="tab:blue")
-    ax1.tick_params(axis="y", labelcolor="tab:blue")
-
+    ax1.set_ylabel("Average Sentiment")
     ax2 = ax1.twinx()
-    ax2.plot(df["timestamp"], df["total"], color="tab:orange", linestyle="--", marker="x", label="Volume")
-    ax2.set_ylabel("Volume (News + Tweets)", color="tab:orange")
-    ax2.tick_params(axis="y", labelcolor="tab:orange")
-
-    plt.title(f"Sentiment & Volume Trend for {ticker}")
+    ax2.plot(df["timestamp"], df["total"], linestyle="--", marker="x", label="Volume")
+    ax2.set_ylabel("Volume")
     fig.tight_layout()
+    plt.title(f"Sentiment & Volume Trend{' for ' + ticker if ticker else ''}")
     plt.grid(True)
-    plt.xticks(rotation=45)
-    plt.show()
+    return fig

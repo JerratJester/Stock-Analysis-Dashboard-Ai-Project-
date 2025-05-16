@@ -1,0 +1,17 @@
+pandas
+numpy
+matplotlib
+streamlit
+tensorflow
+keras
+prophet
+scikit-learn
+ta
+yfinance
+vaderSentiment
+requests
+python-dotenv
+newsapi-python
+tweepy
+joblib
+tqdm

@@ -1,6 +1,6 @@
 import os
 import requests
-from data.env_loader import load_env_keys
+from data.data_loader import load_env_keys
 
 load_env_keys()
 
