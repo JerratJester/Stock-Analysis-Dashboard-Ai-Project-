@@ -40,9 +40,8 @@ Simply reload the Streamlit app:
 
 ```bash
 Ctrl + C
-streamlit run app.py
+streamlit run app.py```
 
-## 🛠️ Setup Instructions (Conda)
 ## 🛠️ Setup Instructions (Conda)
 
 1. **Clone the repository**
